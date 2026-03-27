@@ -247,7 +247,45 @@ weekend_discharge_bonus = st.sidebar.slider(
 # --------------------------------------------------
 # DATA
 # --------------------------------------------------
-baseline = generate_data(n_patients, seed=42)
+uploaded_file = st.sidebar.file_uploader("Upload real dataset (CSV)")
+
+if uploaded_file is not None:
+    baseline = pd.read_csv(uploaded_file)
+
+    # convert datetime columns
+    baseline["admit_datetime"] = pd.to_datetime(baseline["admit_datetime"])
+    baseline["discharge_datetime"] = pd.to_datetime(baseline["discharge_datetime"])
+
+    # calculate LOS
+    baseline["actual_los"] = (
+        (baseline["discharge_datetime"] - baseline["admit_datetime"])
+        .dt.total_seconds() / (3600 * 24)
+    )
+
+    # expected LOS (simple starting model)
+    baseline["expected_los"] = baseline.groupby("specialty")["actual_los"].transform("mean")
+
+    # fill missing delay columns if needed
+    for col in [
+        "diagnostics_delay_days",
+        "allied_delay_days",
+        "destination_delay_days",
+        "discharge_process_delay_days",
+    ]:
+        if col not in baseline.columns:
+            baseline[col] = 0
+
+    # map to existing app variables
+    baseline["diagnostics"] = baseline["diagnostics_delay_days"]
+    baseline["allied"] = baseline["allied_delay_days"]
+    baseline["destination"] = baseline["destination_delay_days"]
+    baseline["discharge"] = baseline["discharge_process_delay_days"]
+
+    # weekend proxy
+    baseline["weekend"] = 0.3
+
+else:
+    baseline = generate_data(n_patients, seed=42)
 
 if selected_specialties:
     baseline = baseline[baseline["specialty"].isin(selected_specialties)].copy()
