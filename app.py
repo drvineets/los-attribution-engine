@@ -155,22 +155,18 @@ def apply_interventions(
 ):
     out = df.copy()
 
-    # global reductions
     out["diagnostics"] *= (1 - global_diag_reduction / 100)
     out["allied"] *= (1 - global_allied_reduction / 100)
     out["destination"] *= (1 - global_dest_reduction / 100)
     out["weekend"] *= (1 - global_weekend_reduction / 100)
 
-    # neurology + respiratory especially benefit from faster diagnostics
     neuro_resp_mask = out["specialty"].isin(["Neurology", "Respiratory"])
     out.loc[neuro_resp_mask, "diagnostics"] *= (1 - neuro_resp_diag_bonus / 100)
 
-    # geriatrics especially benefits from destination and allied support
     geri_mask = out["specialty"] == "Geriatrics"
     out.loc[geri_mask, "destination"] *= (1 - geri_dest_bonus / 100)
     out.loc[geri_mask, "allied"] *= (1 - geri_allied_bonus / 100)
 
-    # weekend discharge process mostly reduces weekend delay
     out["weekend"] *= (1 - weekend_discharge_bonus / 100)
 
     out["actual_los"] = (
@@ -190,6 +186,7 @@ def apply_interventions(
 st.sidebar.title("LOS Simulator")
 
 scenario = st.sidebar.selectbox("Select scenario", list(SCENARIOS.keys()))
+scenario_name = st.sidebar.text_input("Name this scenario", value=scenario)
 
 preset = SCENARIOS[scenario]
 
@@ -200,6 +197,15 @@ selected_specialties = st.sidebar.multiselect(
     "Specialties included",
     SPECIALTIES,
     default=SPECIALTIES,
+)
+
+st.sidebar.header("Financial Assumptions")
+cost_per_bed_day = st.sidebar.number_input(
+    "Estimated cost per bed-day ($)",
+    min_value=500,
+    max_value=5000,
+    value=1500,
+    step=100
 )
 
 st.sidebar.header("General Interventions")
@@ -269,8 +275,10 @@ baseline_los = baseline["actual_los"].mean()
 new_los = df["actual_los"].mean()
 los_reduction = baseline_los - new_los
 bed_days_saved = los_reduction * len(df)
+financial_savings = bed_days_saved * cost_per_bed_day
 
 st.title("🧠 LOS Attribution Engine")
+st.caption(f"Scenario: {scenario_name}")
 st.caption("A simple scenario tool to estimate the impact of operational interventions on length of stay and bed-days.")
 
 m1, m2, m3, m4 = st.columns(4)
@@ -280,10 +288,22 @@ m3.metric("Median LOS", f"{df['actual_los'].median():.2f}")
 m4.metric("P90 LOS", f"{df['actual_los'].quantile(0.90):.2f}")
 
 st.subheader("Intervention Impact")
-i1, i2, i3 = st.columns(3)
+
+i1, i2, i3, i4 = st.columns(4)
 i1.metric("Baseline mean LOS", f"{baseline_los:.2f}")
 i2.metric("LOS reduction", f"{los_reduction:.2f}")
 i3.metric("Bed-days saved", f"{int(bed_days_saved)}")
+i4.metric("Estimated cost savings ($)", f"{int(financial_savings):,}")
+
+st.markdown("### Key Insight")
+if los_reduction > 0:
+    st.success(
+        f"This scenario reduces mean LOS by {los_reduction:.2f} days across {len(df)} episodes, "
+        f"saving approximately {int(bed_days_saved)} bed-days and "
+        f"${int(financial_savings):,} in estimated cost."
+    )
+else:
+    st.info("No improvement applied yet. Adjust the intervention sliders to simulate impact.")
 
 # --------------------------------------------------
 # TABS
@@ -393,6 +413,7 @@ with tab3:
         "Median LOS": [baseline["actual_los"].median(), df["actual_los"].median()],
         "P90 LOS": [baseline["actual_los"].quantile(0.90), df["actual_los"].quantile(0.90)],
         "Total Bed-Days": [baseline["actual_los"].sum(), df["actual_los"].sum()],
+        "Estimated Cost": [baseline["actual_los"].sum() * cost_per_bed_day, df["actual_los"].sum() * cost_per_bed_day],
     })
 
     st.dataframe(
@@ -403,12 +424,13 @@ with tab3:
             "Median LOS": st.column_config.NumberColumn(format="%.2f"),
             "P90 LOS": st.column_config.NumberColumn(format="%.2f"),
             "Total Bed-Days": st.column_config.NumberColumn(format="%.1f"),
+            "Estimated Cost": st.column_config.NumberColumn(format="$%.0f"),
         }
     )
 
     st.info(
         "Use the sliders on the left to estimate how general and specialty-specific interventions "
-        "could change LOS and bed-day consumption."
+        "could change LOS, bed-day consumption, and financial impact."
     )
 
 with tab4:
