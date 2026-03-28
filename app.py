@@ -3,29 +3,6 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-def infer_delays_from_timestamps(df: pd.DataFrame):
-    df = df.copy()
-
-    if "medically_ready_datetime" not in df.columns:
-        df["clinical_los"] = df["actual_los"]
-        df["non_clinical_delay"] = 0.0
-        return df
-
-    mrd = pd.to_datetime(df["medically_ready_datetime"], errors="coerce")
-
-    df["clinical_los"] = (
-        (mrd - df["admit_datetime"]).dt.total_seconds() / (3600 * 24)
-    )
-
-    df["non_clinical_delay"] = (
-        (df["discharge_datetime"] - mrd).dt.total_seconds() / (3600 * 24)
-    )
-
-    # Clean negatives
-    df["clinical_los"] = df["clinical_los"].clip(lower=0)
-    df["non_clinical_delay"] = df["non_clinical_delay"].clip(lower=0)
-
-    return df
 st.set_page_config(
     page_title="LOS Attribution Engine",
     page_icon="🧠",
@@ -46,6 +23,62 @@ SPECIALTY_CONFIG = {
 
 SPECIALTIES = list(SPECIALTY_CONFIG.keys())
 SPECIALTY_WEIGHTS = [SPECIALTY_CONFIG[s]["weight"] for s in SPECIALTIES]
+
+# --------------------------------------------------
+# SCENARIO PRESETS
+# --------------------------------------------------
+SCENARIOS = {
+    "Custom": {
+        "global_diag": 0,
+        "global_allied": 0,
+        "global_dest": 0,
+        "global_weekend": 0,
+        "neuro_resp_diag": 0,
+        "geri_dest": 0,
+        "geri_allied": 0,
+        "weekend_discharge": 0,
+    },
+    "Faster Diagnostics": {
+        "global_diag": 25,
+        "global_allied": 0,
+        "global_dest": 0,
+        "global_weekend": 0,
+        "neuro_resp_diag": 20,
+        "geri_dest": 0,
+        "geri_allied": 0,
+        "weekend_discharge": 0,
+    },
+    "Better Destination Flow": {
+        "global_diag": 0,
+        "global_allied": 0,
+        "global_dest": 25,
+        "global_weekend": 0,
+        "neuro_resp_diag": 0,
+        "geri_dest": 20,
+        "geri_allied": 0,
+        "weekend_discharge": 0,
+    },
+    "Weekend Improvement": {
+        "global_diag": 0,
+        "global_allied": 0,
+        "global_dest": 0,
+        "global_weekend": 20,
+        "neuro_resp_diag": 0,
+        "geri_dest": 0,
+        "geri_allied": 20,
+        "weekend_discharge": 25,
+    },
+    "Combined Package": {
+        "global_diag": 20,
+        "global_allied": 15,
+        "global_dest": 20,
+        "global_weekend": 15,
+        "neuro_resp_diag": 15,
+        "geri_dest": 15,
+        "geri_allied": 20,
+        "weekend_discharge": 20,
+    },
+}
 
 # --------------------------------------------------
 # DATA QUALITY ASSESSMENT
@@ -192,60 +225,30 @@ def generate_data(n=300, seed=42):
     return pd.DataFrame(rows)
 
 # --------------------------------------------------
-# SCENARIO PRESETS
+# INFER DELAYS FROM TIMESTAMPS
 # --------------------------------------------------
-SCENARIOS = {
-    "Custom": {
-        "global_diag": 0,
-        "global_allied": 0,
-        "global_dest": 0,
-        "global_weekend": 0,
-        "neuro_resp_diag": 0,
-        "geri_dest": 0,
-        "geri_allied": 0,
-        "weekend_discharge": 0,
-    },
-    "Faster Diagnostics": {
-        "global_diag": 25,
-        "global_allied": 0,
-        "global_dest": 0,
-        "global_weekend": 0,
-        "neuro_resp_diag": 20,
-        "geri_dest": 0,
-        "geri_allied": 0,
-        "weekend_discharge": 0,
-    },
-    "Better Destination Flow": {
-        "global_diag": 0,
-        "global_allied": 0,
-        "global_dest": 25,
-        "global_weekend": 0,
-        "neuro_resp_diag": 0,
-        "geri_dest": 20,
-        "geri_allied": 0,
-        "weekend_discharge": 0,
-    },
-    "Weekend Improvement": {
-        "global_diag": 0,
-        "global_allied": 0,
-        "global_dest": 0,
-        "global_weekend": 20,
-        "neuro_resp_diag": 0,
-        "geri_dest": 0,
-        "geri_allied": 20,
-        "weekend_discharge": 25,
-    },
-    "Combined Package": {
-        "global_diag": 20,
-        "global_allied": 15,
-        "global_dest": 20,
-        "global_weekend": 15,
-        "neuro_resp_diag": 15,
-        "geri_dest": 15,
-        "geri_allied": 20,
-        "weekend_discharge": 20,
-    },
-}
+def infer_delays_from_timestamps(df: pd.DataFrame):
+    df = df.copy()
+
+    if "medically_ready_datetime" not in df.columns:
+        df["clinical_los"] = df["actual_los"]
+        df["non_clinical_delay"] = 0.0
+        return df
+
+    mrd = pd.to_datetime(df["medically_ready_datetime"], errors="coerce")
+
+    df["clinical_los"] = (
+        (mrd - df["admit_datetime"]).dt.total_seconds() / (3600 * 24)
+    )
+
+    df["non_clinical_delay"] = (
+        (df["discharge_datetime"] - mrd).dt.total_seconds() / (3600 * 24)
+    )
+
+    df["clinical_los"] = df["clinical_los"].clip(lower=0)
+    df["non_clinical_delay"] = df["non_clinical_delay"].clip(lower=0)
+
+    return df
 
 # --------------------------------------------------
 # INTERVENTION LOGIC
@@ -262,6 +265,10 @@ def apply_interventions(
     weekend_discharge_bonus: int,
 ):
     out = df.copy()
+
+    for col in ["diagnostics", "allied", "destination", "weekend", "discharge"]:
+        if col not in out.columns:
+            out[col] = 0.0
 
     out["diagnostics"] *= (1 - global_diag_reduction / 100)
     out["allied"] *= (1 - global_allied_reduction / 100)
@@ -289,9 +296,30 @@ def apply_interventions(
     return out
 
 # --------------------------------------------------
+# HELPER FOR SCENARIO TABLES
+# --------------------------------------------------
+def scenario_metrics_table(baseline_df, scenario_df, cost_per_bed_day):
+    baseline_mean = baseline_df["actual_los"].mean()
+    scenario_mean = scenario_df["actual_los"].mean()
+    los_reduction = baseline_mean - scenario_mean
+    bed_days_saved = baseline_df["actual_los"].sum() - scenario_df["actual_los"].sum()
+    est_savings = bed_days_saved * cost_per_bed_day
+
+    return {
+        "Mean LOS": scenario_mean,
+        "LOS Reduction": los_reduction,
+        "Bed-Days": scenario_df["actual_los"].sum(),
+        "Bed-Days Saved": bed_days_saved,
+        "Estimated Savings": est_savings,
+    }
+
+# --------------------------------------------------
 # SIDEBAR
 # --------------------------------------------------
 st.sidebar.title("LOS Simulator")
+
+exec_mode = st.sidebar.checkbox("Executive mode", value=True)
+scenario_mode = st.sidebar.checkbox("Scenario comparison mode", value=True)
 
 scenario = st.sidebar.selectbox("Select scenario", list(SCENARIOS.keys()))
 scenario_name = st.sidebar.text_input("Name this scenario", value=scenario)
@@ -467,12 +495,16 @@ if uploaded_file is not None:
 else:
     baseline = generate_data(n_patients, seed=42)
 
+if "specialty" in baseline.columns and selected_specialties:
+    baseline = baseline[baseline["specialty"].isin(selected_specialties)].copy()
+
+if len(baseline) == 0:
+    st.warning("No data available after filtering.")
+    st.stop()
+
 # --------------------------------------------------
-# APPLY INTERVENTIONS
+# APPLY MAIN SCENARIO
 # --------------------------------------------------
-for col in ["diagnostics", "allied", "destination", "discharge", "weekend"]:
-    if col not in baseline.columns:
-        baseline[col] = 0.0
 df = apply_interventions(
     baseline,
     global_diag_reduction=global_diag_reduction,
@@ -486,17 +518,82 @@ df = apply_interventions(
 )
 
 # --------------------------------------------------
-# METRICS
+# MAIN METRICS
 # --------------------------------------------------
 baseline_los = baseline["actual_los"].mean()
 new_los = df["actual_los"].mean()
 los_reduction = baseline_los - new_los
-bed_days_saved = los_reduction * len(df)
+bed_days_saved = baseline["actual_los"].sum() - df["actual_los"].sum()
 financial_savings = bed_days_saved * cost_per_bed_day
 
+# --------------------------------------------------
+# EXEC MODE INSIGHTS
+# --------------------------------------------------
+delay_means = (
+    df[["diagnostics", "allied", "destination", "weekend"]]
+    .mean()
+    .sort_values(ascending=False)
+)
+
+top_driver_code = delay_means.index[0]
+driver_label_map = {
+    "diagnostics": "diagnostic delay",
+    "allied": "allied health delay",
+    "destination": "destination delay",
+    "weekend": "weekend-related delay",
+}
+top_driver_label = driver_label_map.get(top_driver_code, top_driver_code)
+
+specialty_mean_los = (
+    df.groupby("specialty")["actual_los"]
+    .mean()
+    .sort_values(ascending=False)
+)
+
+top_specialty = specialty_mean_los.index[0]
+top_specialty_los = specialty_mean_los.iloc[0]
+
+los_reduction_pct = 0.0
+if baseline_los > 0:
+    los_reduction_pct = (los_reduction / baseline_los) * 100
+
+exec_headline = (
+    f"LOS is highest in {top_specialty}, and the largest overall driver is "
+    f"{top_driver_label}."
+)
+
+exec_summary = (
+    f"This scenario reduces mean LOS by {los_reduction:.2f} days "
+    f"({los_reduction_pct:.1f}%), saves approximately {bed_days_saved:.0f} bed-days, "
+    f"and is associated with estimated cost savings of ${financial_savings:,.0f}."
+)
+
+exec_action = (
+    f"The strongest operational lever is to target {top_driver_label}, "
+    f"particularly in {top_specialty}, where mean LOS is {top_specialty_los:.2f} days."
+)
+
+# --------------------------------------------------
+# TITLE + EXEC MODE
+# --------------------------------------------------
 st.title("🧠 LOS Attribution Engine")
 st.caption(f"Scenario: {scenario_name}")
-st.caption("A simple scenario tool to estimate the impact of operational interventions on length of stay and bed-days.")
+st.caption("A scenario tool to estimate the impact of operational interventions on length of stay and bed-days.")
+
+if exec_mode:
+    st.markdown("## Executive Summary")
+    st.info(
+        f"""
+**Headline**  
+{exec_headline}
+
+**Impact of current scenario**  
+{exec_summary}
+
+**Recommended focus**  
+{exec_action}
+"""
+    )
 
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("Episodes", len(df))
@@ -508,85 +605,64 @@ st.subheader("Intervention Impact")
 i1, i2, i3, i4 = st.columns(4)
 i1.metric("Baseline mean LOS", f"{baseline_los:.2f}")
 i2.metric("LOS reduction", f"{los_reduction:.2f}")
-i3.metric("Bed-days saved", f"{int(bed_days_saved)}")
-i4.metric("Estimated cost savings ($)", f"{int(financial_savings):,}")
+i3.metric("Bed-days saved", f"{bed_days_saved:.0f}")
+i4.metric("Estimated cost savings ($)", f"{financial_savings:,.0f}")
+
+if exec_mode:
+    st.subheader("Executive View")
+    e1, e2, e3, e4 = st.columns(4)
+    e1.metric("Top specialty by LOS", top_specialty)
+    e2.metric("Top delay driver", top_driver_label.title())
+    e3.metric("Bed-days released", f"{bed_days_saved:.0f}")
+    e4.metric("Estimated savings", f"${financial_savings:,.0f}")
 
 st.markdown("### Key Insight")
-if "non_clinical_delay" in baseline.columns:
-    avg_delay = baseline["non_clinical_delay"].mean()
-    st.info(f"Average non-clinical delay: {avg_delay:.2f} days")
 if los_reduction > 0:
     st.success(
-        f"This scenario reduces mean LOS by {los_reduction:.2f} days across {len(df)} episodes, "
-        f"saving approximately {int(bed_days_saved)} bed-days and "
-        f"${int(financial_savings):,} in estimated cost."
+        f"Mean LOS falls by {los_reduction:.2f} days, with approximately "
+        f"{int(bed_days_saved)} bed-days released and ${int(financial_savings):,} in estimated savings."
     )
 else:
     st.info("No improvement applied yet. Adjust the intervention sliders to simulate impact.")
 
-# --------------------------------------------------
-# DATA QUALITY DISPLAY
-# --------------------------------------------------
-if uploaded_file is not None and preview_df is not None and quality is not None:
-    st.subheader("Data Quality Assessment")
-
-    q1, q2, q3, q4 = st.columns(4)
-    q1.metric("Data quality score", f"{quality['score']}/100")
-    q2.metric("Missing required columns", len(quality["missing_required"]))
-    q3.metric("Invalid timestamps", quality["invalid_admit_datetime"] + quality["invalid_discharge_datetime"])
-    q4.metric("Invalid LOS rows", quality["negative_or_zero_los"])
-
-    if quality["score"] >= 85:
-        st.success("High-quality dataset: suitable for real modelling.")
-    elif quality["score"] >= 65:
-        st.warning("Moderate-quality dataset: usable, but some fields need improvement.")
-    else:
-        st.error("Low-quality dataset: fix key data issues before using for decision-making.")
-
-    st.subheader("Uploaded Data Preview")
-    st.dataframe(preview_df.head(), width="stretch")
-
-    if quality["missing_required"]:
-        st.error(f"Missing required columns: {quality['missing_required']}")
-        st.stop()
-
-    warnings = []
-    if quality["missing_episode_id"] > 0:
-        warnings.append(f"{quality['missing_episode_id']} rows are missing episode_id.")
-    if quality["missing_specialty"] > 0:
-        warnings.append(f"{quality['missing_specialty']} rows are missing specialty.")
-    if quality["invalid_admit_datetime"] > 0:
-        warnings.append(f"{quality['invalid_admit_datetime']} rows have invalid admit_datetime.")
-    if quality["invalid_discharge_datetime"] > 0:
-        warnings.append(f"{quality['invalid_discharge_datetime']} rows have invalid discharge_datetime.")
-    if quality["negative_or_zero_los"] > 0:
-        warnings.append(f"{quality['negative_or_zero_los']} rows have zero or negative LOS.")
-
-    if warnings:
-        st.markdown("### Validation Warnings")
-        for w in warnings:
-            st.warning(w)
-
-    optional_df = pd.DataFrame(
-        {
-            "Column": list(quality["optional_completeness"].keys()),
-            "Completeness (%)": list(quality["optional_completeness"].values()),
-        }
-    )
-
-    if not optional_df.empty:
-        st.markdown("### Optional Field Completeness")
-        st.dataframe(optional_df, width="stretch")
-
-    with st.expander("Show uploaded dataset structure"):
-        st.write("Columns detected:")
-        st.write(list(preview_df.columns))
-        st.write("Dataset shape:")
-        st.write(preview_df.shape)
+if "non_clinical_delay" in baseline.columns:
+    avg_non_clinical_delay = baseline["non_clinical_delay"].mean()
+    st.caption(f"Average non-clinical delay: {avg_non_clinical_delay:.2f} days")
 
 # --------------------------------------------------
-# TABS
+# SCENARIO MODE
 # --------------------------------------------------
+scenario_table = None
+if scenario_mode:
+    scenario_rows = []
+
+    for scenario_label, settings in SCENARIOS.items():
+        scenario_df = apply_interventions(
+            baseline,
+            global_diag_reduction=settings["global_diag"],
+            global_allied_reduction=settings["global_allied"],
+            global_dest_reduction=settings["global_dest"],
+            global_weekend_reduction=settings["global_weekend"],
+            neuro_resp_diag_bonus=settings["neuro_resp_diag"],
+            geri_dest_bonus=settings["geri_dest"],
+            geri_allied_bonus=settings["geri_allied"],
+            weekend_discharge_bonus=settings["weekend_discharge"],
+        )
+
+        metrics = scenario_metrics_table(baseline, scenario_df, cost_per_bed_day)
+        scenario_rows.append(
+            {
+                "Scenario": scenario_label,
+                "Mean LOS": metrics["Mean LOS"],
+                "LOS Reduction": metrics["LOS Reduction"],
+                "Bed-Days": metrics["Bed-Days"],
+                "Bed-Days Saved": metrics["Bed-Days Saved"],
+                "Estimated Savings": metrics["Estimated Savings"],
+            }
+        )
+
+    scenario_table = pd.DataFrame(scenario_rows).sort_values("Mean LOS", ascending=True)
+
 # --------------------------------------------------
 # TABS
 # --------------------------------------------------
@@ -742,7 +818,7 @@ with tab3:
     st.subheader("Scenario Comparison")
 
     comparison = pd.DataFrame({
-        "Scenario": ["Baseline", "Intervention"],
+        "Scenario": ["Baseline", scenario_name],
         "Mean LOS": [baseline_los, new_los],
         "Median LOS": [baseline["actual_los"].median(), df["actual_los"].median()],
         "P90 LOS": [baseline["actual_los"].quantile(0.90), df["actual_los"].quantile(0.90)],
@@ -753,10 +829,17 @@ with tab3:
         ],
     })
 
-    st.dataframe(
-        comparison.round(2),
-        width="stretch"
-    )
+    st.dataframe(comparison.round(2), width="stretch")
+
+    if scenario_mode and scenario_table is not None:
+        st.subheader("Scenario Engine")
+        st.dataframe(scenario_table.round(2), width="stretch")
+
+        best_scenario = scenario_table.sort_values("Estimated Savings", ascending=False).iloc[0]
+        st.success(
+            f"Highest estimated savings: {best_scenario['Scenario']} "
+            f"(${best_scenario['Estimated Savings']:,.0f})."
+        )
 
     st.info(
         "Use the sliders on the left to estimate how general and specialty-specific interventions "
