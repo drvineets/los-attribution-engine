@@ -360,7 +360,7 @@ if uploaded_file is not None:
         st.error("Low-quality dataset: fix key data issues before using for decision-making.")
 
     st.subheader("Uploaded Data Preview")
-    st.dataframe(preview_df.head(), use_container_width=True)
+    st.dataframe(preview_df.head(), width="stretch")
 
     # Show optional completeness
     optional_df = pd.DataFrame(
@@ -372,7 +372,7 @@ if uploaded_file is not None:
 
     if not optional_df.empty:
         st.markdown("### Optional Field Completeness")
-        st.dataframe(optional_df, use_container_width=True)
+        st.dataframe(optional_df, width="stretch")
 
     with st.expander("Show uploaded dataset structure"):
         st.write("Columns detected:")
@@ -520,7 +520,7 @@ if uploaded_file is not None and preview_df is not None and quality is not None:
         st.error("Low-quality dataset: fix key data issues before using for decision-making.")
 
     st.subheader("Uploaded Data Preview")
-    st.dataframe(preview_df.head(), use_container_width=True)
+    st.dataframe(preview_df.head(), width="stretch")
 
     if quality["missing_required"]:
         st.error(f"Missing required columns: {quality['missing_required']}")
@@ -552,7 +552,7 @@ if uploaded_file is not None and preview_df is not None and quality is not None:
 
     if not optional_df.empty:
         st.markdown("### Optional Field Completeness")
-        st.dataframe(optional_df, use_container_width=True)
+        st.dataframe(optional_df, width="stretch")
 
     with st.expander("Show uploaded dataset structure"):
         st.write("Columns detected:")
@@ -630,7 +630,7 @@ with tab2:
 
     st.dataframe(
         specialty_summary.round(2).sort_values("intervention_mean_los", ascending=False),
-        use_container_width=True,
+        width="stretch",
         column_config={
             "specialty": "Specialty",
             "episodes": "Episodes",
@@ -674,7 +674,7 @@ with tab3:
 
     st.dataframe(
         comparison.round(2),
-        use_container_width=True,
+        width="stretch",
         column_config={
             "Mean LOS": st.column_config.NumberColumn(format="%.2f"),
             "Median LOS": st.column_config.NumberColumn(format="%.2f"),
