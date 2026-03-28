@@ -340,55 +340,118 @@ if uploaded_file is not None:
     preview_df = pd.read_csv(uploaded_file)
     quality = assess_data_quality(preview_df)
 
-    if quality["missing_required"]:
-        baseline = preview_df.copy()
+    # Show quality summary first
+    st.subheader("Data Quality Assessment")
+
+    q1, q2, q3, q4 = st.columns(4)
+    q1.metric("Data quality score", f"{quality['score']}/100")
+    q2.metric("Missing required columns", len(quality["missing_required"]))
+    q3.metric(
+        "Invalid timestamps",
+        quality["invalid_admit_datetime"] + quality["invalid_discharge_datetime"]
+    )
+    q4.metric("Invalid LOS rows", quality["negative_or_zero_los"])
+
+    if quality["score"] >= 85:
+        st.success("High-quality dataset: suitable for real modelling.")
+    elif quality["score"] >= 65:
+        st.warning("Moderate-quality dataset: usable, but some fields need improvement.")
     else:
-        baseline = preview_df.copy()
+        st.error("Low-quality dataset: fix key data issues before using for decision-making.")
 
-        baseline["admit_datetime"] = pd.to_datetime(baseline["admit_datetime"], errors="coerce")
-        baseline["discharge_datetime"] = pd.to_datetime(baseline["discharge_datetime"], errors="coerce")
+    st.subheader("Uploaded Data Preview")
+    st.dataframe(preview_df.head(), use_container_width=True)
 
-        baseline["actual_los"] = (
-            (baseline["discharge_datetime"] - baseline["admit_datetime"]).dt.total_seconds() / (3600 * 24)
-        )
-
-        baseline["expected_los"] = baseline.groupby("specialty")["actual_los"].transform("mean")
-
-        optional_delay_defaults = {
-            "diagnostics_delay_days": 0.0,
-            "allied_delay_days": 0.0,
-            "destination_delay_days": 0.0,
-            "discharge_process_delay_days": 0.0,
+    # Show optional completeness
+    optional_df = pd.DataFrame(
+        {
+            "Column": list(quality["optional_completeness"].keys()),
+            "Completeness (%)": list(quality["optional_completeness"].values()),
         }
+    )
 
-        for col, default in optional_delay_defaults.items():
-            if col not in baseline.columns:
-                baseline[col] = default
-            else:
-                baseline[col] = baseline[col].fillna(default)
+    if not optional_df.empty:
+        st.markdown("### Optional Field Completeness")
+        st.dataframe(optional_df, use_container_width=True)
 
-        baseline["diagnostics"] = baseline["diagnostics_delay_days"]
-        baseline["allied"] = baseline["allied_delay_days"]
-        baseline["destination"] = baseline["destination_delay_days"]
-        baseline["discharge"] = baseline["discharge_process_delay_days"]
-        baseline["weekend"] = baseline["admit_datetime"].dt.dayofweek.isin([5, 6]).astype(float) * 0.3
+    with st.expander("Show uploaded dataset structure"):
+        st.write("Columns detected:")
+        st.write(list(preview_df.columns))
+        st.write("Dataset shape:")
+        st.write(preview_df.shape)
 
-        baseline = baseline.dropna(subset=["episode_id", "specialty", "admit_datetime", "discharge_datetime"])
-        baseline = baseline[baseline["actual_los"] > 0].copy()
+    # -----------------------------
+    # STRICT MODE: STOP ON CRITICAL ISSUES
+    # -----------------------------
+    if quality["missing_required"]:
+        st.error(f"Missing required columns: {quality['missing_required']}")
+        st.stop()
+
+    if quality["invalid_admit_datetime"] > 0 or quality["invalid_discharge_datetime"] > 0:
+        st.error("Uploaded dataset contains invalid datetime values. Please correct them before modelling.")
+        st.stop()
+
+    if quality["negative_or_zero_los"] > 0:
+        st.error("Uploaded dataset contains zero or negative LOS rows. Please correct them before modelling.")
+        st.stop()
+
+    if quality["missing_episode_id"] > 0:
+        st.error("Uploaded dataset contains missing episode_id values. Please correct them before modelling.")
+        st.stop()
+
+    if quality["missing_specialty"] > 0:
+        st.error("Uploaded dataset contains missing specialty values. Please correct them before modelling.")
+        st.stop()
+
+    # -----------------------------
+    # SAFE CLEAN LOAD
+    # -----------------------------
+    baseline = preview_df.copy()
+
+    baseline["admit_datetime"] = pd.to_datetime(baseline["admit_datetime"], errors="coerce")
+    baseline["discharge_datetime"] = pd.to_datetime(baseline["discharge_datetime"], errors="coerce")
+
+    baseline["actual_los"] = (
+        (baseline["discharge_datetime"] - baseline["admit_datetime"]).dt.total_seconds() / (3600 * 24)
+    )
+
+    baseline["expected_los"] = baseline.groupby("specialty")["actual_los"].transform("mean")
+
+    optional_delay_defaults = {
+        "diagnostics_delay_days": 0.0,
+        "allied_delay_days": 0.0,
+        "destination_delay_days": 0.0,
+        "discharge_process_delay_days": 0.0,
+    }
+
+    for col, default in optional_delay_defaults.items():
+        if col not in baseline.columns:
+            baseline[col] = default
+        else:
+            baseline[col] = pd.to_numeric(baseline[col], errors="coerce").fillna(default)
+
+    baseline["diagnostics"] = baseline["diagnostics_delay_days"]
+    baseline["allied"] = baseline["allied_delay_days"]
+    baseline["destination"] = baseline["destination_delay_days"]
+    baseline["discharge"] = baseline["discharge_process_delay_days"]
+    baseline["weekend"] = baseline["admit_datetime"].dt.dayofweek.isin([5, 6]).astype(float) * 0.3
+
+    baseline = baseline.dropna(subset=["episode_id", "specialty", "admit_datetime", "discharge_datetime"])
+    baseline = baseline[baseline["actual_los"] > 0].copy()
+
+    if baseline.empty:
+        st.error("No valid rows remain after validation and cleaning.")
+        st.stop()
 
 else:
     baseline = generate_data(n_patients, seed=42)
 
-if "specialty" in baseline.columns and selected_specialties:
-    baseline = baseline[baseline["specialty"].isin(selected_specialties)].copy()
-
-if len(baseline) == 0:
-    st.warning("No data available after filtering.")
-    st.stop()
-
 # --------------------------------------------------
 # APPLY INTERVENTIONS
 # --------------------------------------------------
+for col in ["diagnostics", "allied", "destination", "discharge", "weekend"]:
+    if col not in baseline.columns:
+        baseline[col] = 0.0
 df = apply_interventions(
     baseline,
     global_diag_reduction=global_diag_reduction,
