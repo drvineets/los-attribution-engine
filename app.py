@@ -3,6 +3,29 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
+def infer_delays_from_timestamps(df: pd.DataFrame):
+    df = df.copy()
+
+    if "medically_ready_datetime" not in df.columns:
+        df["clinical_los"] = df["actual_los"]
+        df["non_clinical_delay"] = 0.0
+        return df
+
+    mrd = pd.to_datetime(df["medically_ready_datetime"], errors="coerce")
+
+    df["clinical_los"] = (
+        (mrd - df["admit_datetime"]).dt.total_seconds() / (3600 * 24)
+    )
+
+    df["non_clinical_delay"] = (
+        (df["discharge_datetime"] - mrd).dt.total_seconds() / (3600 * 24)
+    )
+
+    # Clean negatives
+    df["clinical_los"] = df["clinical_los"].clip(lower=0)
+    df["non_clinical_delay"] = df["non_clinical_delay"].clip(lower=0)
+
+    return df
 st.set_page_config(
     page_title="LOS Attribution Engine",
     page_icon="🧠",
@@ -340,7 +363,6 @@ if uploaded_file is not None:
     preview_df = pd.read_csv(uploaded_file)
     quality = assess_data_quality(preview_df)
 
-    # Show quality summary first
     st.subheader("Data Quality Assessment")
 
     q1, q2, q3, q4 = st.columns(4)
@@ -362,7 +384,6 @@ if uploaded_file is not None:
     st.subheader("Uploaded Data Preview")
     st.dataframe(preview_df.head(), width="stretch")
 
-    # Show optional completeness
     optional_df = pd.DataFrame(
         {
             "Column": list(quality["optional_completeness"].keys()),
@@ -380,9 +401,6 @@ if uploaded_file is not None:
         st.write("Dataset shape:")
         st.write(preview_df.shape)
 
-    # -----------------------------
-    # STRICT MODE: STOP ON CRITICAL ISSUES
-    # -----------------------------
     if quality["missing_required"]:
         st.error(f"Missing required columns: {quality['missing_required']}")
         st.stop()
@@ -403,9 +421,6 @@ if uploaded_file is not None:
         st.error("Uploaded dataset contains missing specialty values. Please correct them before modelling.")
         st.stop()
 
-    # -----------------------------
-    # SAFE CLEAN LOAD
-    # -----------------------------
     baseline = preview_df.copy()
 
     baseline["admit_datetime"] = pd.to_datetime(baseline["admit_datetime"], errors="coerce")
@@ -416,6 +431,7 @@ if uploaded_file is not None:
     )
 
     baseline["expected_los"] = baseline.groupby("specialty")["actual_los"].transform("mean")
+    baseline = infer_delays_from_timestamps(baseline)
 
     optional_delay_defaults = {
         "diagnostics_delay_days": 0.0,
@@ -430,10 +446,15 @@ if uploaded_file is not None:
         else:
             baseline[col] = pd.to_numeric(baseline[col], errors="coerce").fillna(default)
 
-    baseline["diagnostics"] = baseline["diagnostics_delay_days"]
-    baseline["allied"] = baseline["allied_delay_days"]
-    baseline["destination"] = baseline["destination_delay_days"]
-    baseline["discharge"] = baseline["discharge_process_delay_days"]
+    if "non_clinical_delay" in baseline.columns:
+        baseline["destination"] = baseline["non_clinical_delay"] * 0.6
+        baseline["discharge"] = baseline["non_clinical_delay"] * 0.4
+    else:
+        baseline["destination"] = baseline.get("destination_delay_days", 0.0)
+        baseline["discharge"] = baseline.get("discharge_process_delay_days", 0.0)
+
+    baseline["diagnostics"] = baseline.get("diagnostics_delay_days", 0.0)
+    baseline["allied"] = baseline.get("allied_delay_days", 0.0)
     baseline["weekend"] = baseline["admit_datetime"].dt.dayofweek.isin([5, 6]).astype(float) * 0.3
 
     baseline = baseline.dropna(subset=["episode_id", "specialty", "admit_datetime", "discharge_datetime"])
@@ -491,6 +512,9 @@ i3.metric("Bed-days saved", f"{int(bed_days_saved)}")
 i4.metric("Estimated cost savings ($)", f"{int(financial_savings):,}")
 
 st.markdown("### Key Insight")
+if "non_clinical_delay" in baseline.columns:
+    avg_delay = baseline["non_clinical_delay"].mean()
+    st.info(f"Average non-clinical delay: {avg_delay:.2f} days")
 if los_reduction > 0:
     st.success(
         f"This scenario reduces mean LOS by {los_reduction:.2f} days across {len(df)} episodes, "
