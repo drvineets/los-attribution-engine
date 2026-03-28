@@ -578,6 +578,7 @@ with tab1:
         ax1.set_xlabel("LOS (days)")
         ax1.set_ylabel("Patients")
         st.pyplot(fig1)
+        plt.close(fig1)
 
     with c2:
         st.subheader("Delay Contribution")
@@ -595,6 +596,7 @@ with tab1:
         ax2.set_ylabel("Total bed-days")
         ax2.tick_params(axis="x", rotation=25)
         st.pyplot(fig2)
+        plt.close(fig2)
 
 with tab2:
     st.subheader("Specialty Summary")
