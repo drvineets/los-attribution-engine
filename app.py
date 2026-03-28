@@ -587,6 +587,9 @@ if uploaded_file is not None and preview_df is not None and quality is not None:
 # --------------------------------------------------
 # TABS
 # --------------------------------------------------
+# --------------------------------------------------
+# TABS
+# --------------------------------------------------
 tab1, tab2, tab3, tab4 = st.tabs(
     ["Overview", "Specialty Analysis", "Scenario Comparison", "Example Patient"]
 )
@@ -648,28 +651,18 @@ with tab2:
     specialty_summary = baseline_specialty.merge(
         intervention_specialty, on="specialty", how="outer"
     )
+
     specialty_summary["los_reduction"] = (
         specialty_summary["baseline_mean_los"] - specialty_summary["intervention_mean_los"]
     )
 
     st.dataframe(
         specialty_summary.round(2).sort_values("intervention_mean_los", ascending=False),
-        width="stretch",
-        column_config={
-            "specialty": "Specialty",
-            "episodes": "Episodes",
-            "baseline_mean_los": st.column_config.NumberColumn("Baseline mean LOS", format="%.2f"),
-            "intervention_mean_los": st.column_config.NumberColumn("Intervention mean LOS", format="%.2f"),
-            "expected_mean_los": st.column_config.NumberColumn("Expected mean LOS", format="%.2f"),
-            "diagnostics_days": st.column_config.NumberColumn("Diagnostics delay", format="%.2f"),
-            "allied_days": st.column_config.NumberColumn("Allied health delay", format="%.2f"),
-            "destination_days": st.column_config.NumberColumn("Destination delay", format="%.2f"),
-            "weekend_days": st.column_config.NumberColumn("Weekend delay", format="%.2f"),
-            "los_reduction": st.column_config.NumberColumn("LOS reduction", format="%.2f"),
-        }
+        width="stretch"
     )
 
     st.subheader("Baseline vs Intervention by Specialty")
+
     chart_df = specialty_summary.sort_values("intervention_mean_los", ascending=False)
     x = np.arange(len(chart_df))
     width = 0.35
@@ -683,6 +676,67 @@ with tab2:
     ax3.set_title("Baseline vs Intervention Mean LOS")
     ax3.legend()
     st.pyplot(fig3)
+    plt.close(fig3)
+
+    st.subheader("Delay Attribution by Specialty")
+
+    delay_summary = (
+        df.groupby("specialty")
+        .agg(
+            mean_los=("actual_los", "mean"),
+            diagnostics=("diagnostics", "mean"),
+            allied=("allied", "mean"),
+            destination=("destination", "mean"),
+            weekend=("weekend", "mean"),
+        )
+        .reset_index()
+    )
+
+    def get_biggest_driver(row):
+        drivers = {
+            "Diagnostics": row["diagnostics"],
+            "Allied": row["allied"],
+            "Destination": row["destination"],
+            "Weekend": row["weekend"],
+        }
+        return max(drivers, key=drivers.get)
+
+    delay_summary["Biggest Driver"] = delay_summary.apply(get_biggest_driver, axis=1)
+
+    st.dataframe(delay_summary.round(2), width="stretch")
+
+    st.subheader("Delay Breakdown by Specialty")
+
+    x2 = np.arange(len(delay_summary))
+
+    fig4, ax4 = plt.subplots(figsize=(8, 4))
+    ax4.bar(x2, delay_summary["diagnostics"], label="Diagnostics")
+    ax4.bar(
+        x2,
+        delay_summary["allied"],
+        bottom=delay_summary["diagnostics"],
+        label="Allied"
+    )
+    ax4.bar(
+        x2,
+        delay_summary["destination"],
+        bottom=delay_summary["diagnostics"] + delay_summary["allied"],
+        label="Destination"
+    )
+    ax4.bar(
+        x2,
+        delay_summary["weekend"],
+        bottom=delay_summary["diagnostics"] + delay_summary["allied"] + delay_summary["destination"],
+        label="Weekend"
+    )
+
+    ax4.set_xticks(x2)
+    ax4.set_xticklabels(delay_summary["specialty"])
+    ax4.set_ylabel("Days")
+    ax4.set_title("Delay Contribution by Specialty")
+    ax4.legend()
+    st.pyplot(fig4)
+    plt.close(fig4)
 
 with tab3:
     st.subheader("Scenario Comparison")
@@ -693,19 +747,15 @@ with tab3:
         "Median LOS": [baseline["actual_los"].median(), df["actual_los"].median()],
         "P90 LOS": [baseline["actual_los"].quantile(0.90), df["actual_los"].quantile(0.90)],
         "Total Bed-Days": [baseline["actual_los"].sum(), df["actual_los"].sum()],
-        "Estimated Cost": [baseline["actual_los"].sum() * cost_per_bed_day, df["actual_los"].sum() * cost_per_bed_day],
+        "Estimated Cost": [
+            baseline["actual_los"].sum() * cost_per_bed_day,
+            df["actual_los"].sum() * cost_per_bed_day
+        ],
     })
 
     st.dataframe(
         comparison.round(2),
-        width="stretch",
-        column_config={
-            "Mean LOS": st.column_config.NumberColumn(format="%.2f"),
-            "Median LOS": st.column_config.NumberColumn(format="%.2f"),
-            "P90 LOS": st.column_config.NumberColumn(format="%.2f"),
-            "Total Bed-Days": st.column_config.NumberColumn(format="%.1f"),
-            "Estimated Cost": st.column_config.NumberColumn(format="$%.0f"),
-        }
+        width="stretch"
     )
 
     st.info(
@@ -715,11 +765,11 @@ with tab3:
 
 with tab4:
     st.subheader("Example Patient Attribution")
+
     row = df.sample(1, random_state=42).iloc[0]
 
-    st.write({
-        "Episode ID": row["episode_id"] if "episode_id" in row else "N/A",
-        "Patient ID": row["patient_id"] if "patient_id" in row else "N/A",
+    example_output = {
+        "Episode ID": row["episode_id"] if "episode_id" in row.index else "N/A",
         "Specialty": row["specialty"],
         "Expected LOS": round(row["expected_los"], 2),
         "Diagnostic delay": round(row["diagnostics"], 2),
@@ -728,4 +778,15 @@ with tab4:
         "Weekend-related delay": round(row["weekend"], 2),
         "Discharge process delay": round(row["discharge"], 2),
         "Actual LOS": round(row["actual_los"], 2),
-    })
+    }
+
+    if "patient_id" in row.index:
+        example_output["Patient ID"] = row["patient_id"]
+
+    if "clinical_los" in row.index:
+        example_output["Clinical LOS"] = round(row["clinical_los"], 2)
+
+    if "non_clinical_delay" in row.index:
+        example_output["Non-clinical delay"] = round(row["non_clinical_delay"], 2)
+
+    st.write(example_output)
