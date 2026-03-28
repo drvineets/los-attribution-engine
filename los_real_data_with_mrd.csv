@@ -1,0 +1,11 @@
+episode_id,specialty,age,admit_datetime,discharge_datetime,diagnosis_group,destination_type,medically_ready_datetime,diagnostics_delay_days,allied_delay_days,destination_delay_days,discharge_process_delay_days
+E001,GenMed1,72,2026-02-01 10:00,2026-02-06 14:00,Pneumonia,Home,2026-02-05 09:00,0.8,0.4,0.6,0.2
+E002,GenMed2,68,2026-02-03 11:30,2026-02-08 15:00,Sepsis,Home with supports,2026-02-07 10:00,1.0,0.5,0.7,0.3
+E003,Geriatrics,85,2026-02-04 09:15,2026-02-12 12:00,Falls,Aged Care,2026-02-09 11:00,0.6,1.2,2.0,0.5
+E004,Neurology,59,2026-02-05 14:00,2026-02-11 10:30,Stroke,Rehab,2026-02-09 13:00,1.5,0.6,1.3,0.4
+E005,Respiratory,74,2026-02-06 08:45,2026-02-10 16:00,COPD,Home,2026-02-09 09:30,0.9,0.4,0.5,0.2
+E006,GenMed1,63,2026-02-07 12:00,2026-02-12 11:00,UTI,Home,2026-02-11 08:00,0.5,0.3,0.8,0.2
+E007,Geriatrics,88,2026-02-08 15:00,2026-02-16 13:30,Delirium,Rehab,2026-02-13 10:00,0.7,1.4,2.2,0.6
+E008,Neurology,67,2026-02-09 10:00,2026-02-15 14:00,Seizure,Home,2026-02-13 09:30,1.3,0.5,1.0,0.3
+E009,Respiratory,70,2026-02-10 16:20,2026-02-15 12:00,Pneumonia,Home with supports,2026-02-14 10:00,0.8,0.5,0.7,0.2
+E010,GenMed2,77,2026-02-11 09:10,2026-02-17 15:30,Heart failure,Aged Care,2026-02-15 11:00,1.1,0.7,1.8,0.4

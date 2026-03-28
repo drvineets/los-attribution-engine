@@ -11,7 +11,7 @@ st.set_page_config(
 )
 
 # --------------------------------------------------
-# SPECIALTY CONFIG
+# CONFIG
 # --------------------------------------------------
 SPECIALTY_CONFIG = {
     "GenMed1": {"mean_los": 4.4, "sd_los": 1.0, "weight": 0.22},
@@ -24,9 +24,6 @@ SPECIALTY_CONFIG = {
 SPECIALTIES = list(SPECIALTY_CONFIG.keys())
 SPECIALTY_WEIGHTS = [SPECIALTY_CONFIG[s]["weight"] for s in SPECIALTIES]
 
-# --------------------------------------------------
-# SCENARIO PRESETS
-# --------------------------------------------------
 SCENARIOS = {
     "Custom": {
         "global_diag": 0,
@@ -80,8 +77,9 @@ SCENARIOS = {
     },
 }
 
+
 # --------------------------------------------------
-# DATA QUALITY ASSESSMENT
+# HELPERS
 # --------------------------------------------------
 def assess_data_quality(df: pd.DataFrame):
     required_columns = [
@@ -154,7 +152,7 @@ def assess_data_quality(df: pd.DataFrame):
     if results["optional_completeness"]:
         avg_optional = np.mean(list(results["optional_completeness"].values()))
         if avg_optional >= 90:
-            score += 0
+            pass
         elif avg_optional >= 75:
             score -= 5
         elif avg_optional >= 50:
@@ -165,9 +163,7 @@ def assess_data_quality(df: pd.DataFrame):
     results["score"] = int(max(0, min(100, score)))
     return results
 
-# --------------------------------------------------
-# FAKE DATA GENERATOR
-# --------------------------------------------------
+
 def generate_data(n=300, seed=42):
     np.random.seed(seed)
     rows = []
@@ -198,7 +194,7 @@ def generate_data(n=300, seed=42):
             allied = np.random.exponential(0.7)
             destination = np.random.exponential(1.25)
             weekend = np.random.exponential(0.4)
-        else:  # GenMed1
+        else:
             diagnostics = np.random.exponential(0.7)
             allied = np.random.exponential(0.5)
             destination = np.random.exponential(1.0)
@@ -224,35 +220,30 @@ def generate_data(n=300, seed=42):
 
     return pd.DataFrame(rows)
 
-# --------------------------------------------------
-# INFER DELAYS FROM TIMESTAMPS
-# --------------------------------------------------
+
 def infer_delays_from_timestamps(df: pd.DataFrame):
-    df = df.copy()
+    out = df.copy()
 
-    if "medically_ready_datetime" not in df.columns:
-        df["clinical_los"] = df["actual_los"]
-        df["non_clinical_delay"] = 0.0
-        return df
+    if "medically_ready_datetime" not in out.columns:
+        out["clinical_los"] = out["actual_los"]
+        out["non_clinical_delay"] = 0.0
+        return out
 
-    mrd = pd.to_datetime(df["medically_ready_datetime"], errors="coerce")
+    mrd = pd.to_datetime(out["medically_ready_datetime"], errors="coerce")
 
-    df["clinical_los"] = (
-        (mrd - df["admit_datetime"]).dt.total_seconds() / (3600 * 24)
+    out["clinical_los"] = (
+        (mrd - out["admit_datetime"]).dt.total_seconds() / (3600 * 24)
+    )
+    out["non_clinical_delay"] = (
+        (out["discharge_datetime"] - mrd).dt.total_seconds() / (3600 * 24)
     )
 
-    df["non_clinical_delay"] = (
-        (df["discharge_datetime"] - mrd).dt.total_seconds() / (3600 * 24)
-    )
+    out["clinical_los"] = out["clinical_los"].clip(lower=0).fillna(0)
+    out["non_clinical_delay"] = out["non_clinical_delay"].clip(lower=0).fillna(0)
 
-    df["clinical_los"] = df["clinical_los"].clip(lower=0)
-    df["non_clinical_delay"] = df["non_clinical_delay"].clip(lower=0)
+    return out
 
-    return df
 
-# --------------------------------------------------
-# INTERVENTION LOGIC
-# --------------------------------------------------
 def apply_interventions(
     df: pd.DataFrame,
     global_diag_reduction: int,
@@ -295,9 +286,7 @@ def apply_interventions(
 
     return out
 
-# --------------------------------------------------
-# HELPER FOR SCENARIO TABLES
-# --------------------------------------------------
+
 def scenario_metrics_table(baseline_df, scenario_df, cost_per_bed_day):
     baseline_mean = baseline_df["actual_los"].mean()
     scenario_mean = scenario_df["actual_los"].mean()
@@ -312,6 +301,7 @@ def scenario_metrics_table(baseline_df, scenario_df, cost_per_bed_day):
         "Bed-Days Saved": bed_days_saved,
         "Estimated Savings": est_savings,
     }
+
 
 # --------------------------------------------------
 # SIDEBAR
@@ -418,7 +408,6 @@ if uploaded_file is not None:
             "Completeness (%)": list(quality["optional_completeness"].values()),
         }
     )
-
     if not optional_df.empty:
         st.markdown("### Optional Field Completeness")
         st.dataframe(optional_df, width="stretch")
@@ -527,7 +516,7 @@ bed_days_saved = baseline["actual_los"].sum() - df["actual_los"].sum()
 financial_savings = bed_days_saved * cost_per_bed_day
 
 # --------------------------------------------------
-# EXEC MODE INSIGHTS
+# EXEC INSIGHTS
 # --------------------------------------------------
 delay_means = (
     df[["diagnostics", "allied", "destination", "weekend"]]
@@ -558,81 +547,24 @@ if baseline_los > 0:
     los_reduction_pct = (los_reduction / baseline_los) * 100
 
 exec_headline = (
-    f"LOS is highest in {top_specialty}, and the largest overall driver is "
-    f"{top_driver_label}."
+    f"LOS is highest in {top_specialty}, and the largest overall driver is {top_driver_label}."
 )
-
 exec_summary = (
-    f"This scenario reduces mean LOS by {los_reduction:.2f} days "
-    f"({los_reduction_pct:.1f}%), saves approximately {bed_days_saved:.0f} bed-days, "
-    f"and is associated with estimated cost savings of ${financial_savings:,.0f}."
+    f"This scenario reduces mean LOS by {los_reduction:.2f} days ({los_reduction_pct:.1f}%), "
+    f"saves approximately {bed_days_saved:.0f} bed-days, and is associated with estimated cost savings of "
+    f"${financial_savings:,.0f}."
 )
-
 exec_action = (
-    f"The strongest operational lever is to target {top_driver_label}, "
-    f"particularly in {top_specialty}, where mean LOS is {top_specialty_los:.2f} days."
+    f"The strongest operational lever is to target {top_driver_label}, particularly in {top_specialty}, "
+    f"where mean LOS is {top_specialty_los:.2f} days."
 )
 
 # --------------------------------------------------
-# TITLE + EXEC MODE
-# --------------------------------------------------
-st.title("🧠 LOS Attribution Engine")
-st.caption(f"Scenario: {scenario_name}")
-st.caption("A scenario tool to estimate the impact of operational interventions on length of stay and bed-days.")
-
-if exec_mode:
-    st.markdown("## Executive Summary")
-    st.info(
-        f"""
-**Headline**  
-{exec_headline}
-
-**Impact of current scenario**  
-{exec_summary}
-
-**Recommended focus**  
-{exec_action}
-"""
-    )
-
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("Episodes", len(df))
-m2.metric("Mean LOS", f"{df['actual_los'].mean():.2f}")
-m3.metric("Median LOS", f"{df['actual_los'].median():.2f}")
-m4.metric("P90 LOS", f"{df['actual_los'].quantile(0.90):.2f}")
-
-st.subheader("Intervention Impact")
-i1, i2, i3, i4 = st.columns(4)
-i1.metric("Baseline mean LOS", f"{baseline_los:.2f}")
-i2.metric("LOS reduction", f"{los_reduction:.2f}")
-i3.metric("Bed-days saved", f"{bed_days_saved:.0f}")
-i4.metric("Estimated cost savings ($)", f"{financial_savings:,.0f}")
-
-if exec_mode:
-    st.subheader("Executive View")
-    e1, e2, e3, e4 = st.columns(4)
-    e1.metric("Top specialty by LOS", top_specialty)
-    e2.metric("Top delay driver", top_driver_label.title())
-    e3.metric("Bed-days released", f"{bed_days_saved:.0f}")
-    e4.metric("Estimated savings", f"${financial_savings:,.0f}")
-
-st.markdown("### Key Insight")
-if los_reduction > 0:
-    st.success(
-        f"Mean LOS falls by {los_reduction:.2f} days, with approximately "
-        f"{int(bed_days_saved)} bed-days released and ${int(financial_savings):,} in estimated savings."
-    )
-else:
-    st.info("No improvement applied yet. Adjust the intervention sliders to simulate impact.")
-
-if "non_clinical_delay" in baseline.columns:
-    avg_non_clinical_delay = baseline["non_clinical_delay"].mean()
-    st.caption(f"Average non-clinical delay: {avg_non_clinical_delay:.2f} days")
-
-# --------------------------------------------------
-# SCENARIO MODE
+# SCENARIO ENGINE
 # --------------------------------------------------
 scenario_table = None
+auto_recommendation = None
+
 if scenario_mode:
     scenario_rows = []
 
@@ -662,6 +594,109 @@ if scenario_mode:
         )
 
     scenario_table = pd.DataFrame(scenario_rows).sort_values("Mean LOS", ascending=True)
+
+    if not scenario_table.empty:
+        ranked = scenario_table.sort_values(
+            ["Estimated Savings", "Mean LOS"],
+            ascending=[False, True]
+        ).reset_index(drop=True)
+
+        best_row = ranked.iloc[0]
+
+        auto_recommendation = {
+            "scenario": best_row["Scenario"],
+            "mean_los": best_row["Mean LOS"],
+            "los_reduction": best_row["LOS Reduction"],
+            "bed_days_saved": best_row["Bed-Days Saved"],
+            "estimated_savings": best_row["Estimated Savings"],
+        }
+
+# --------------------------------------------------
+# HEADER
+# --------------------------------------------------
+st.title("🧠 LOS Attribution Engine")
+st.caption(f"Scenario: {scenario_name}")
+st.caption("A scenario tool to estimate the impact of operational interventions on length of stay and bed-days.")
+
+if exec_mode:
+    st.markdown("## Executive Summary")
+    st.info(
+        f"""
+**Headline**  
+{exec_headline}
+
+**Impact of current scenario**  
+{exec_summary}
+
+**Recommended focus**  
+{exec_action}
+"""
+    )
+
+if exec_mode and auto_recommendation is not None:
+    st.markdown("## Recommended Scenario")
+
+    if auto_recommendation["estimated_savings"] > 0:
+        st.success(
+            f"The best preset scenario is **{auto_recommendation['scenario']}**. "
+            f"It is projected to reduce mean LOS by {auto_recommendation['los_reduction']:.2f} days, "
+            f"release approximately {auto_recommendation['bed_days_saved']:.0f} bed-days, "
+            f"and generate estimated savings of ${auto_recommendation['estimated_savings']:,.0f}."
+        )
+    else:
+        st.warning(
+            f"None of the current preset scenarios improves performance materially. "
+            f"The least harmful option is **{auto_recommendation['scenario']}**, "
+            f"but it still does not generate net savings."
+        )
+
+# --------------------------------------------------
+# TOP METRICS
+# --------------------------------------------------
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Episodes", len(df))
+m2.metric("Mean LOS", f"{df['actual_los'].mean():.2f}")
+m3.metric("Median LOS", f"{df['actual_los'].median():.2f}")
+m4.metric("P90 LOS", f"{df['actual_los'].quantile(0.90):.2f}")
+
+st.subheader("Intervention Impact")
+i1, i2, i3, i4 = st.columns(4)
+i1.metric("Baseline mean LOS", f"{baseline_los:.2f}")
+i2.metric("LOS reduction", f"{los_reduction:.2f}")
+i3.metric("Bed-days saved", f"{bed_days_saved:.0f}")
+i4.metric("Estimated cost savings ($)", f"{financial_savings:,.0f}")
+
+if exec_mode:
+    st.subheader("Executive View")
+    e1, e2, e3, e4 = st.columns(4)
+    e1.metric("Top specialty by LOS", top_specialty)
+    e2.metric("Top delay driver", top_driver_label.title())
+    e3.metric("Bed-days released", f"{bed_days_saved:.0f}")
+    e4.metric("Estimated savings", f"${financial_savings:,.0f}")
+
+st.markdown("### Key Insight")
+if los_reduction > 0:
+    st.success(
+        f"Mean LOS falls by {los_reduction:.2f} days, with approximately "
+        f"{int(bed_days_saved)} bed-days released and ${int(financial_savings):,} in estimated savings."
+    )
+elif los_reduction < 0:
+    st.error(
+        f"Mean LOS increases by {abs(los_reduction):.2f} days, resulting in approximately "
+        f"{abs(int(bed_days_saved))} additional bed-days and ${abs(int(financial_savings)):,} in additional cost."
+    )
+else:
+    st.info("No net change in LOS under the current scenario.")
+
+if los_reduction < 0:
+    st.warning(
+        f"This scenario worsens performance. The likely reason is that the main current bottleneck is "
+        f"{top_driver_label}, but the selected intervention mix is not improving that enough."
+    )
+
+if "non_clinical_delay" in baseline.columns:
+    avg_non_clinical_delay = baseline["non_clinical_delay"].mean()
+    st.caption(f"Average non-clinical delay: {avg_non_clinical_delay:.2f} days")
 
 # --------------------------------------------------
 # TABS
@@ -727,7 +762,6 @@ with tab2:
     specialty_summary = baseline_specialty.merge(
         intervention_specialty, on="specialty", how="outer"
     )
-
     specialty_summary["los_reduction"] = (
         specialty_summary["baseline_mean_los"] - specialty_summary["intervention_mean_los"]
     )
@@ -741,11 +775,11 @@ with tab2:
 
     chart_df = specialty_summary.sort_values("intervention_mean_los", ascending=False)
     x = np.arange(len(chart_df))
-    width = 0.35
+    bar_width = 0.35
 
     fig3, ax3 = plt.subplots(figsize=(8, 4))
-    ax3.bar(x - width / 2, chart_df["baseline_mean_los"], width, label="Baseline")
-    ax3.bar(x + width / 2, chart_df["intervention_mean_los"], width, label="Intervention")
+    ax3.bar(x - bar_width / 2, chart_df["baseline_mean_los"], bar_width, label="Baseline")
+    ax3.bar(x + bar_width / 2, chart_df["intervention_mean_los"], bar_width, label="Intervention")
     ax3.set_xticks(x)
     ax3.set_xticklabels(chart_df["specialty"])
     ax3.set_ylabel("Mean LOS")
@@ -787,12 +821,7 @@ with tab2:
 
     fig4, ax4 = plt.subplots(figsize=(8, 4))
     ax4.bar(x2, delay_summary["diagnostics"], label="Diagnostics")
-    ax4.bar(
-        x2,
-        delay_summary["allied"],
-        bottom=delay_summary["diagnostics"],
-        label="Allied"
-    )
+    ax4.bar(x2, delay_summary["allied"], bottom=delay_summary["diagnostics"], label="Allied")
     ax4.bar(
         x2,
         delay_summary["destination"],
@@ -831,10 +860,16 @@ with tab3:
 
     st.dataframe(comparison.round(2), width="stretch")
 
-    if scenario_mode and scenario_table is not None:
-        st.subheader("Scenario Engine")
-        st.dataframe(scenario_table.round(2), width="stretch")
+    if auto_recommendation is not None:
+        st.markdown("### Best Preset Option")
+        st.write(
+            f"Best current preset scenario: **{auto_recommendation['scenario']}**"
+        )
 
+    if scenario_mode and scenario_table is not None:
+        st.subheader("Preset Scenario Ranking")
+        st.dataframe(scenario_table.round(2), width="stretch", hide_index=True)
+        st.caption("This compares preset packages vs baseline, not the current live sliders.")
         best_scenario = scenario_table.sort_values("Estimated Savings", ascending=False).iloc[0]
         st.success(
             f"Highest estimated savings: {best_scenario['Scenario']} "
