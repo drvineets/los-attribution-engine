@@ -25,7 +25,92 @@ SPECIALTIES = list(SPECIALTY_CONFIG.keys())
 SPECIALTY_WEIGHTS = [SPECIALTY_CONFIG[s]["weight"] for s in SPECIALTIES]
 
 # --------------------------------------------------
-# DATA GENERATOR
+# DATA QUALITY ASSESSMENT
+# --------------------------------------------------
+def assess_data_quality(df: pd.DataFrame):
+    required_columns = [
+        "episode_id",
+        "specialty",
+        "admit_datetime",
+        "discharge_datetime",
+    ]
+
+    optional_columns = [
+        "age",
+        "diagnosis_group",
+        "destination_type",
+        "medically_ready_datetime",
+        "diagnostics_delay_days",
+        "allied_delay_days",
+        "destination_delay_days",
+        "discharge_process_delay_days",
+    ]
+
+    results = {
+        "missing_required": [],
+        "missing_optional": [],
+        "invalid_admit_datetime": 0,
+        "invalid_discharge_datetime": 0,
+        "negative_or_zero_los": 0,
+        "missing_specialty": 0,
+        "missing_episode_id": 0,
+        "optional_completeness": {},
+        "score": 0,
+    }
+
+    for col in required_columns:
+        if col not in df.columns:
+            results["missing_required"].append(col)
+
+    for col in optional_columns:
+        if col not in df.columns:
+            results["missing_optional"].append(col)
+
+    if results["missing_required"]:
+        results["score"] = max(0, 100 - 25 * len(results["missing_required"]))
+        return results
+
+    results["missing_specialty"] = int(df["specialty"].isna().sum())
+    results["missing_episode_id"] = int(df["episode_id"].isna().sum())
+
+    admit_parsed = pd.to_datetime(df["admit_datetime"], errors="coerce")
+    discharge_parsed = pd.to_datetime(df["discharge_datetime"], errors="coerce")
+
+    results["invalid_admit_datetime"] = int(admit_parsed.isna().sum())
+    results["invalid_discharge_datetime"] = int(discharge_parsed.isna().sum())
+
+    los_days = (discharge_parsed - admit_parsed).dt.total_seconds() / (3600 * 24)
+    results["negative_or_zero_los"] = int((los_days <= 0).fillna(False).sum())
+
+    for col in optional_columns:
+        if col in df.columns:
+            completeness = 100 * (1 - df[col].isna().mean())
+            results["optional_completeness"][col] = round(completeness, 1)
+
+    score = 100
+    score -= 25 * len(results["missing_required"])
+    score -= min(15, results["missing_specialty"] * 2)
+    score -= min(15, results["missing_episode_id"] * 2)
+    score -= min(20, results["invalid_admit_datetime"] * 2)
+    score -= min(20, results["invalid_discharge_datetime"] * 2)
+    score -= min(20, results["negative_or_zero_los"] * 2)
+
+    if results["optional_completeness"]:
+        avg_optional = np.mean(list(results["optional_completeness"].values()))
+        if avg_optional >= 90:
+            score += 0
+        elif avg_optional >= 75:
+            score -= 5
+        elif avg_optional >= 50:
+            score -= 10
+        else:
+            score -= 15
+
+    results["score"] = int(max(0, min(100, score)))
+    return results
+
+# --------------------------------------------------
+# FAKE DATA GENERATOR
 # --------------------------------------------------
 def generate_data(n=300, seed=42):
     np.random.seed(seed)
@@ -64,12 +149,12 @@ def generate_data(n=300, seed=42):
             weekend = np.random.exponential(0.35)
 
         discharge = np.random.exponential(0.3)
-
         actual = expected + diagnostics + allied + destination + weekend + discharge
 
         rows.append(
             {
                 "patient_id": f"P{i+1:04d}",
+                "episode_id": f"E{i+1:04d}",
                 "specialty": specialty,
                 "expected_los": expected,
                 "diagnostics": diagnostics,
@@ -187,7 +272,6 @@ st.sidebar.title("LOS Simulator")
 
 scenario = st.sidebar.selectbox("Select scenario", list(SCENARIOS.keys()))
 scenario_name = st.sidebar.text_input("Name this scenario", value=scenario)
-
 preset = SCENARIOS[scenario]
 
 st.sidebar.header("Population")
@@ -198,6 +282,8 @@ selected_specialties = st.sidebar.multiselect(
     SPECIALTIES,
     default=SPECIALTIES,
 )
+
+uploaded_file = st.sidebar.file_uploader("Upload real dataset (CSV)", type=["csv"])
 
 st.sidebar.header("Financial Assumptions")
 cost_per_bed_day = st.sidebar.number_input(
@@ -245,51 +331,64 @@ weekend_discharge_bonus = st.sidebar.slider(
 )
 
 # --------------------------------------------------
-# DATA
+# LOAD DATA
 # --------------------------------------------------
-uploaded_file = st.sidebar.file_uploader("Upload real dataset (CSV)")
+quality = None
+preview_df = None
 
 if uploaded_file is not None:
-    baseline = pd.read_csv(uploaded_file)
+    preview_df = pd.read_csv(uploaded_file)
+    quality = assess_data_quality(preview_df)
 
-    # convert datetime columns
-    baseline["admit_datetime"] = pd.to_datetime(baseline["admit_datetime"])
-    baseline["discharge_datetime"] = pd.to_datetime(baseline["discharge_datetime"])
+    if quality["missing_required"]:
+        baseline = preview_df.copy()
+    else:
+        baseline = preview_df.copy()
 
-    # calculate LOS
-    baseline["actual_los"] = (
-        (baseline["discharge_datetime"] - baseline["admit_datetime"])
-        .dt.total_seconds() / (3600 * 24)
-    )
+        baseline["admit_datetime"] = pd.to_datetime(baseline["admit_datetime"], errors="coerce")
+        baseline["discharge_datetime"] = pd.to_datetime(baseline["discharge_datetime"], errors="coerce")
 
-    # expected LOS (simple starting model)
-    baseline["expected_los"] = baseline.groupby("specialty")["actual_los"].transform("mean")
+        baseline["actual_los"] = (
+            (baseline["discharge_datetime"] - baseline["admit_datetime"]).dt.total_seconds() / (3600 * 24)
+        )
 
-    # fill missing delay columns if needed
-    for col in [
-        "diagnostics_delay_days",
-        "allied_delay_days",
-        "destination_delay_days",
-        "discharge_process_delay_days",
-    ]:
-        if col not in baseline.columns:
-            baseline[col] = 0
+        baseline["expected_los"] = baseline.groupby("specialty")["actual_los"].transform("mean")
 
-    # map to existing app variables
-    baseline["diagnostics"] = baseline["diagnostics_delay_days"]
-    baseline["allied"] = baseline["allied_delay_days"]
-    baseline["destination"] = baseline["destination_delay_days"]
-    baseline["discharge"] = baseline["discharge_process_delay_days"]
+        optional_delay_defaults = {
+            "diagnostics_delay_days": 0.0,
+            "allied_delay_days": 0.0,
+            "destination_delay_days": 0.0,
+            "discharge_process_delay_days": 0.0,
+        }
 
-    # weekend proxy
-    baseline["weekend"] = 0.3
+        for col, default in optional_delay_defaults.items():
+            if col not in baseline.columns:
+                baseline[col] = default
+            else:
+                baseline[col] = baseline[col].fillna(default)
+
+        baseline["diagnostics"] = baseline["diagnostics_delay_days"]
+        baseline["allied"] = baseline["allied_delay_days"]
+        baseline["destination"] = baseline["destination_delay_days"]
+        baseline["discharge"] = baseline["discharge_process_delay_days"]
+        baseline["weekend"] = baseline["admit_datetime"].dt.dayofweek.isin([5, 6]).astype(float) * 0.3
+
+        baseline = baseline.dropna(subset=["episode_id", "specialty", "admit_datetime", "discharge_datetime"])
+        baseline = baseline[baseline["actual_los"] > 0].copy()
 
 else:
     baseline = generate_data(n_patients, seed=42)
 
-if selected_specialties:
+if "specialty" in baseline.columns and selected_specialties:
     baseline = baseline[baseline["specialty"].isin(selected_specialties)].copy()
 
+if len(baseline) == 0:
+    st.warning("No data available after filtering.")
+    st.stop()
+
+# --------------------------------------------------
+# APPLY INTERVENTIONS
+# --------------------------------------------------
 df = apply_interventions(
     baseline,
     global_diag_reduction=global_diag_reduction,
@@ -301,10 +400,6 @@ df = apply_interventions(
     geri_allied_bonus=geri_allied_bonus,
     weekend_discharge_bonus=weekend_discharge_bonus,
 )
-
-if len(df) == 0:
-    st.warning("No specialties selected.")
-    st.stop()
 
 # --------------------------------------------------
 # METRICS
@@ -326,7 +421,6 @@ m3.metric("Median LOS", f"{df['actual_los'].median():.2f}")
 m4.metric("P90 LOS", f"{df['actual_los'].quantile(0.90):.2f}")
 
 st.subheader("Intervention Impact")
-
 i1, i2, i3, i4 = st.columns(4)
 i1.metric("Baseline mean LOS", f"{baseline_los:.2f}")
 i2.metric("LOS reduction", f"{los_reduction:.2f}")
@@ -342,6 +436,66 @@ if los_reduction > 0:
     )
 else:
     st.info("No improvement applied yet. Adjust the intervention sliders to simulate impact.")
+
+# --------------------------------------------------
+# DATA QUALITY DISPLAY
+# --------------------------------------------------
+if uploaded_file is not None and preview_df is not None and quality is not None:
+    st.subheader("Data Quality Assessment")
+
+    q1, q2, q3, q4 = st.columns(4)
+    q1.metric("Data quality score", f"{quality['score']}/100")
+    q2.metric("Missing required columns", len(quality["missing_required"]))
+    q3.metric("Invalid timestamps", quality["invalid_admit_datetime"] + quality["invalid_discharge_datetime"])
+    q4.metric("Invalid LOS rows", quality["negative_or_zero_los"])
+
+    if quality["score"] >= 85:
+        st.success("High-quality dataset: suitable for real modelling.")
+    elif quality["score"] >= 65:
+        st.warning("Moderate-quality dataset: usable, but some fields need improvement.")
+    else:
+        st.error("Low-quality dataset: fix key data issues before using for decision-making.")
+
+    st.subheader("Uploaded Data Preview")
+    st.dataframe(preview_df.head(), use_container_width=True)
+
+    if quality["missing_required"]:
+        st.error(f"Missing required columns: {quality['missing_required']}")
+        st.stop()
+
+    warnings = []
+    if quality["missing_episode_id"] > 0:
+        warnings.append(f"{quality['missing_episode_id']} rows are missing episode_id.")
+    if quality["missing_specialty"] > 0:
+        warnings.append(f"{quality['missing_specialty']} rows are missing specialty.")
+    if quality["invalid_admit_datetime"] > 0:
+        warnings.append(f"{quality['invalid_admit_datetime']} rows have invalid admit_datetime.")
+    if quality["invalid_discharge_datetime"] > 0:
+        warnings.append(f"{quality['invalid_discharge_datetime']} rows have invalid discharge_datetime.")
+    if quality["negative_or_zero_los"] > 0:
+        warnings.append(f"{quality['negative_or_zero_los']} rows have zero or negative LOS.")
+
+    if warnings:
+        st.markdown("### Validation Warnings")
+        for w in warnings:
+            st.warning(w)
+
+    optional_df = pd.DataFrame(
+        {
+            "Column": list(quality["optional_completeness"].keys()),
+            "Completeness (%)": list(quality["optional_completeness"].values()),
+        }
+    )
+
+    if not optional_df.empty:
+        st.markdown("### Optional Field Completeness")
+        st.dataframe(optional_df, use_container_width=True)
+
+    with st.expander("Show uploaded dataset structure"):
+        st.write("Columns detected:")
+        st.write(list(preview_df.columns))
+        st.write("Dataset shape:")
+        st.write(preview_df.shape)
 
 # --------------------------------------------------
 # TABS
@@ -385,7 +539,7 @@ with tab2:
     baseline_specialty = (
         baseline.groupby("specialty", as_index=False)
         .agg(
-            episodes=("patient_id", "count"),
+            episodes=("episode_id", "count"),
             baseline_mean_los=("actual_los", "mean"),
         )
     )
@@ -428,7 +582,6 @@ with tab2:
 
     st.subheader("Baseline vs Intervention by Specialty")
     chart_df = specialty_summary.sort_values("intervention_mean_los", ascending=False)
-
     x = np.arange(len(chart_df))
     width = 0.35
 
@@ -473,11 +626,11 @@ with tab3:
 
 with tab4:
     st.subheader("Example Patient Attribution")
-
     row = df.sample(1, random_state=42).iloc[0]
 
     st.write({
-        "Patient ID": row["patient_id"],
+        "Episode ID": row["episode_id"] if "episode_id" in row else "N/A",
+        "Patient ID": row["patient_id"] if "patient_id" in row else "N/A",
         "Specialty": row["specialty"],
         "Expected LOS": round(row["expected_los"], 2),
         "Diagnostic delay": round(row["diagnostics"], 2),
